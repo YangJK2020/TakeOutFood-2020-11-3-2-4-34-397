@@ -3,83 +3,129 @@
     using System;
     using System.Collections.Generic;
     using System.Text;
+    using System.Linq;
 
     public class App
     {
         private IItemRepository itemRepository;
         private ISalesPromotionRepository salesPromotionRepository;
-
         public App(IItemRepository itemRepository, ISalesPromotionRepository salesPromotionRepository)
         {
             this.itemRepository = itemRepository;
             this.salesPromotionRepository = salesPromotionRepository;
         }
-
-        public string BestCharge(List<string> inputs)
+        private List<ItemWithCount> GetSelectedItems (List<string> inputs)
         {
-            //TODO: write code here
             List<Item> foodDataBase = itemRepository.FindAll();
-            List<SalesPromotion> promotionDataBase = salesPromotionRepository.FindAll();
-            List<Item> selectedItems = new List<Item>();
-            List<int> itemCounts = new List<int>();
-            List<SalesPromotion> possiblePromotions = new List<SalesPromotion>();
-            foreach (var i in inputs)
+            List<ItemWithCount> selectedItems = new List<ItemWithCount>();
+            foreach (var input in inputs)
             {
-                var itemID = i.Substring(0, 7);
-                foreach (var j in foodDataBase)
+                var itemID = input.Substring(0, 8);
+                foreach (var food in foodDataBase)
                 {
-                    if (itemID == j.Id)
+                    if (itemID == food.Id)
                     {
-                        selectedItems.Add(j);
-                        itemCounts.Add(Convert.ToInt16(i.Substring(i.IndexOf("x") + 1)));
+                        int count = int.Parse(input.Substring(input.IndexOf("x") + 1));
+                        selectedItems.Add(new ItemWithCount(food.Id, food.Name, food.Price, count));
                     }
                 }
             }
-
+            return selectedItems;
+        }
+        private List<FeasiblePromotion> GetPromotionScenarios (List<ItemWithCount> selectedItems)
+        {
+            List<SalesPromotion> promotionDataBase = salesPromotionRepository.FindAll();
+            List<FeasiblePromotion> possiblePromotions = new List<FeasiblePromotion>();
+            List<string> inputItems = new List<string>();
+            foreach (var item in selectedItems)
+            {
+                inputItems.Add(item.Id);
+            }
             foreach (var promotion in promotionDataBase)
             {
-                SalesPromotion possibleScenario = new SalesPromotion("Type", "DisplayName", new List<string>());
-                foreach (var itemselect in selectedItems)
+                if (promotion.RelatedItems.Intersect(inputItems).Count() != 0)
                 {
-                    if (promotion.RelatedItems.Contains(itemselect.Id))
+                    FeasiblePromotion temp = new FeasiblePromotion();
+                    temp.DiscountedIds = promotion.RelatedItems.Intersect(inputItems);
+                    var discountItems = new List<ItemWithCount>();
+                    foreach (var id in temp.DiscountedIds)
                     {
-
-                        possibleScenario.RelatedItems.Add(itemselect.Id);
+                        foreach (var j in selectedItems)
+                        {
+                            if (id == j.Id)
+                            {
+                                
+                                discountItems.Add(j);
+                            }
+                        }
                     }
+                    temp.DiscountedItems = discountItems;
+                    temp.DisplayName = promotion.DisplayName;
+                    temp.Discount = Convert.ToDouble(promotion.Type.Substring(0, 2)) / 100;
+                    possiblePromotions.Add(temp);
                 }
-                possiblePromotions.Add(possibleScenario);
             }
-
-
-            StringBuilder sb = new StringBuilder();
-            if (possiblePromotions.Count == 0)
+            return possiblePromotions;
+        }
+        public string BestCharge(List<string> inputs)
+        {
+            var selectedItems = GetSelectedItems(inputs);
+            var promotionScenarios = GetPromotionScenarios(selectedItems);
+            if (promotionScenarios.Count() == 0)
             {
-                double total = 0;
-                sb.Append("============= Order details =============\n");
-                for (var i = 0; i < selectedItems.Count; i++)
+                StringBuilder output = new StringBuilder();
+                output.Append("============= Order details =============\n");
+                double totalCharge = 0;
+                foreach(var selectedItem in selectedItems)
                 {
-                    double price = selectedItems[i].Price * itemCounts[i];
-                    total += price;
-                    sb.Append(selectedItems[i].Name + "x" + itemCounts[i].ToString() + "=" + price.ToString() + "yuan\n");
+                    totalCharge += selectedItem.ItemCharge;
+                    output.Append(selectedItem.Name + " x " + selectedItem.Count.ToString() + " = " + selectedItem.ItemCharge.ToString() + " yuan\n");
                 }
-                sb.Append("Total：" + total.ToString() + "yuan\n");
-                sb.Append("===================================");
-                return sb.ToString();
+                output.Append("-----------------------------------\n");
+                output.Append("Total：" + totalCharge.ToString() + " yuan\n");
+                output.Append("===================================");
+                return output.ToString();
             }
             else
             {
-
-                //Code to compare different promotions should be implemented. will be added before this weekend 
-                return "============= Order details =============\n" +
-                    "Braised chicken x 1 = 18 yuan\n" +
-                    "Chinese hamburger x 2 = 12 yuan\n" +
-                    "Cold noodles x 1 = 8 yuan\n" +
-                    "-----------------------------------\n" +
-                    "Promotion used:\n" +
-                    "Half price for certain dishes (Braised chicken, Cold noodles), saving 13 yuan\n" +
-                    "-----------------------------------\n" +
-                    "Total：25 yuan\n" +
-                    "===================================";
+                var bestPromotion = new FeasiblePromotion();
+                double bestMoneySaved = 0;
+                foreach (var promotionScenario in promotionScenarios)
+                {
+                    double moneySaved = 0;
+                    foreach (var discountedItem in promotionScenario.DiscountedItems)
+                    {
+                        moneySaved += discountedItem.ItemCharge * (1 - promotionScenario.Discount);
+                    }
+                    if (moneySaved > bestMoneySaved)
+                    {
+                        bestMoneySaved = moneySaved;
+                        bestPromotion = promotionScenario;
+                    }
+                }
+                StringBuilder output = new StringBuilder();
+                output.Append("============= Order details =============\n");
+                double totalCharge = 0;
+                foreach (var selectedItem in selectedItems)
+                {
+                    totalCharge += selectedItem.ItemCharge;
+                    output.Append(selectedItem.Name + " x " + selectedItem.Count.ToString() + " = " + selectedItem.ItemCharge.ToString() + " yuan\n");
+                }
+                StringBuilder discountDishes = new StringBuilder();
+                discountDishes.Append(" (" + bestPromotion.DiscountedItems[0].Name);
+                var itemCount = bestPromotion.DiscountedItems.Count();
+                for (var i = 1; i < itemCount - 1; i++)
+                {
+                    discountDishes.Append(", " + bestPromotion.DiscountedItems[i].Name);
+                }
+                discountDishes.Append(", " + bestPromotion.DiscountedItems[itemCount-1].Name + "), ");
+                output.Append("-----------------------------------\n");
+                output.Append("Promotion used:\n");
+                output.Append(bestPromotion.DisplayName + discountDishes.ToString() + "saving " + bestMoneySaved.ToString() + " yuan\n");
+                output.Append("-----------------------------------\n");
+                output.Append("Total：" + (totalCharge - bestMoneySaved).ToString() + " yuan\n");
+                output.Append("===================================");
+                return output.ToString();
             }
         }
     }
